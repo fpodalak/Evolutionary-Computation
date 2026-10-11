@@ -1,0 +1,328 @@
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <algorithm>
+#include <random>
+#include <limits>
+#include <numeric>
+#include <iomanip>
+#include <stdexcept>
+
+struct Node {
+    double x, y;
+    int cost;
+};
+
+struct ExperimentResult {
+    double min_val;
+    double max_val;
+    double avg_val;
+    std::vector<int> best_cycle;
+};
+
+constexpr int RANDOM_TRIALS = 200;
+
+int compute_dist(const Node& a, const Node& b) {
+    double d = std::hypot(a.x - b.x, a.y - b.y);
+    return static_cast<int>(std::floor(d + 0.5));
+}
+
+std::vector<std::vector<int>> build_dist_matrix(const std::vector<Node>& nodes) {
+    int n = nodes.size();
+    std::vector<std::vector<int>> dist_matrix(n, std::vector<int>(n, 0));
+    for (int i=0; i<n; ++i) {
+        for (int j=0; j<n; ++j) {
+            dist_matrix[i][j] = compute_dist(nodes[i], nodes[j]);
+        }
+    }
+    return dist_matrix;
+}
+
+int evaluate_cycle(const std::vector<int>& cycle, const std::vector<std::vector<int>>& dist_matrix, const std::vector<int>& costs) {
+    int k = cycle.size();
+    int total_cost = 0;
+    for (int i = 0; i < k; ++i) {
+        total_cost += dist_matrix[cycle[i]][cycle[(i + 1) % k]];
+        total_cost += costs[cycle[i]];
+    }
+    return total_cost;
+}
+
+ExperimentResult solve_random(int n, int k, const std::vector<std::vector<int>>& dist_matrix, const std::vector<int>& costs) {
+    double min_val = std::numeric_limits<double>::infinity();
+    double max_val = -1.0;
+    double sum_val = 0.0;
+    std::vector<int> best_cycle;
+    std::vector<int> candidates(n);
+    std::iota(candidates.begin(), candidates.end(), 0);
+    std::mt19937 generator(std::random_device{}());
+
+    for (int trial = 0; trial < RANDOM_TRIALS; ++trial) {
+        std::shuffle(candidates.begin(), candidates.end(), generator);
+        std::vector<int> cycle(candidates.begin(), candidates.begin() + k);
+        int score = evaluate_cycle(cycle, dist_matrix, costs);
+        sum_val += score;
+        if (score < min_val) {
+            min_val = score;
+            best_cycle = cycle;
+        }
+        if (score > max_val) {
+            max_val = score;
+        }
+    }
+    return {min_val, max_val, sum_val / RANDOM_TRIALS, best_cycle};
+}
+
+ExperimentResult solve_nn_end(int n, int k, const std::vector<std::vector<int>>& dist_matrix, const std::vector<int>& costs) {
+    double min_val = std::numeric_limits<double>::infinity();
+    double max_val = -1.0;
+    double sum_val = 0.0;
+    std::vector<int> best_cycle;
+
+    for (int start = 0; start < n; ++start) {
+        std::vector<bool> visited(n, false);
+        visited[start] = true;
+        std::vector<int> path;
+        path.reserve(k);
+        path.push_back(start);
+
+        while (static_cast<int>(path.size()) < k) {
+            int best_node = -1;
+            int best_increase = std::numeric_limits<int>::max();
+            int last = path.back();
+
+            for (int v = 0; v < n; ++v) {
+                if (visited[v]) continue;
+                int increase = dist_matrix[last][v] + costs[v];
+                if (increase < best_increase) {
+                    best_increase = increase;
+                    best_node = v;
+                }
+            }
+
+            if (best_node == -1) {
+                throw std::runtime_error("NN-End: no feasible node found");
+            }
+
+            visited[best_node] = true;
+            path.push_back(best_node);
+        }
+
+        int score = evaluate_cycle(path, dist_matrix, costs);
+        sum_val += score;
+        if (score < min_val) {
+            min_val = score;
+            best_cycle = path;
+        }
+        if (score > max_val) {
+            max_val = score;
+        }
+    }
+    return {min_val, max_val, sum_val / n, best_cycle};
+}
+
+ExperimentResult solve_nn_any(int n, int k, const std::vector<std::vector<int>>& dist_matrix, const std::vector<int>& costs) {
+    double min_val = std::numeric_limits<double>::infinity();
+    double max_val = -1.0;
+    double sum_val = 0.0;
+    std::vector<int> best_cycle;
+
+    for (int start = 0; start < n; ++start) {
+        std::vector<bool> visited(n, false);
+        visited[start] = true;
+        std::vector<int> path;
+        path.reserve(k);
+        path.push_back(start);
+
+        while (static_cast<int>(path.size()) < k) {
+            int cur_m = path.size();
+            int best_node = -1;
+            int best_pos = -1;
+            int best_increase = std::numeric_limits<int>::max();
+
+            for (int v = 0; v < n; ++v) {
+                if (visited[v]) continue;
+
+                int d0 = dist_matrix[v][path[0]] + costs[v];
+                if (d0 < best_increase) {
+                    best_increase = d0;
+                    best_node = v;
+                    best_pos = 0;
+                }
+
+                int dm = dist_matrix[path.back()][v] + costs[v];
+                if (dm < best_increase) {
+                    best_increase = dm;
+                    best_node = v;
+                    best_pos = cur_m;
+                }
+
+                for (int i = 0; i < cur_m - 1; ++i) {
+                    int d_in = dist_matrix[path[i]][v] + dist_matrix[v][path[i+1]] - dist_matrix[path[i]][path[i+1]] + costs[v];
+                    if (d_in < best_increase) {
+                        best_increase = d_in;
+                        best_node = v;
+                        best_pos = i + 1;
+                    }
+                }
+            }
+
+            if (best_node == -1 || best_pos == -1) {
+                throw std::runtime_error("NN-Any: no feasible insertion found");
+            }
+
+            visited[best_node] = true;
+            path.insert(path.begin() + best_pos, best_node);
+        }
+
+        int score = evaluate_cycle(path, dist_matrix, costs);
+        sum_val += score;
+        if (score < min_val) {
+            min_val = score;
+            best_cycle = path;
+        }
+        if (score > max_val) {
+            max_val = score;
+        }
+    }
+    return {min_val, max_val, sum_val / n, best_cycle};
+}
+
+ExperimentResult solve_greedy_cycle(int n, int k, const std::vector<std::vector<int>>& dist_matrix, const std::vector<int>& costs) {
+    double min_val = std::numeric_limits<double>::infinity();
+    double max_val = -1.0;
+    double sum_val = 0;
+    std::vector<int> best_cycle;
+
+    for (int start = 0; start < n; ++start) {
+        std::vector<bool> visited(n, false);
+        visited[start] = true;
+        std::vector<int> cycle;
+        cycle.reserve(k);
+        cycle.push_back(start);
+
+        while (static_cast<int>(cycle.size()) < k) {
+            int cur_m = cycle.size();
+            int best_node = -1;
+            int best_pos = -1;
+            int best_increase = std::numeric_limits<int>::max();
+
+            for (int v = 0; v < n; ++v) {
+                if (visited[v]) continue;
+
+                for (int i = 0; i < cur_m; ++i) {
+                    int u1 = cycle[i];
+                    int u2 = cycle[(i+1) % cur_m];
+                    int increase = dist_matrix[u1][v] + dist_matrix[v][u2] - dist_matrix[u1][u2] + costs[v];
+                    if (increase < best_increase) {
+                        best_increase = increase;
+                        best_node = v;
+                        best_pos = i + 1;
+                    }
+                }
+            }
+
+            if (best_node == -1 || best_pos == -1) {
+                throw std::runtime_error("Greedy-Cycle: no feasible insertion found");
+            }
+
+            visited[best_node] = true;
+            cycle.insert(cycle.begin() + best_pos, best_node);
+        }
+        
+        int score = evaluate_cycle(cycle, dist_matrix, costs);
+        sum_val += score;
+        if (score < min_val) {
+            min_val = score;
+            best_cycle = cycle;
+        }
+        if (score > max_val) {
+            max_val = score;
+        }
+    }
+    return {min_val, max_val, sum_val / n, best_cycle};
+}
+
+void print_cycle(const std::vector<int>& cycle) {
+    std::cout << "[";
+    for (size_t i = 0; i < cycle.size(); ++i) {
+        if (i > 0) std::cout << ", ";
+        std::cout << cycle[i];
+    }
+    std::cout << "]";
+}
+
+std::vector<Node> load_instance(const std::string& filename) {
+    std::vector<Node> nodes;
+    std::ifstream infile(filename);
+    std::string line;
+    while (std::getline(infile, line)) {
+        if (line.empty()) continue;
+        std::stringstream ss(line);
+        std::string part;
+        std::vector<std::string> tokens;
+        while (std::getline(ss, part, ';')) {
+            if (!part.empty()) tokens.push_back(part);
+        }
+        if (tokens.size() < 3) {
+            ss.clear();
+            ss.str(line);
+            tokens.clear();
+            while (ss >> part) tokens.push_back(part);
+        }
+        if (tokens.size() >= 3) {
+            nodes.push_back({std::stod(tokens[0]), std::stod(tokens[1]), std::stoi(tokens[2])});
+        }
+    }
+    return nodes;
+}
+
+int main() {
+std::vector<std::string> filenames = {"TSPA.csv", "TSPB.csv"};
+
+    for (const auto& file : filenames) {
+        std::vector<Node> nodes = load_instance(file);
+        if (nodes.empty()) {
+            std::cerr << "Failed to load instance from file: " << file << "\n";
+            continue;
+        }
+        int n = nodes.size();
+        int k = (n + 1) / 2;
+        auto dist = build_dist_matrix(nodes);
+        std::vector<int> costs;
+        costs.reserve(nodes.size());
+        for (const Node& node : nodes) {
+            costs.push_back(node.cost);
+        }
+
+        std::cout << "\n================ " << file << " ================\n";
+        auto r_rand = solve_random(n, k, dist, costs);
+        std::cout << "Random:       min=" << r_rand.min_val << ", max=" << r_rand.max_val << ", avg=" << std::fixed << std::setprecision(2) << r_rand.avg_val << "\n";
+        std::cout << "  best cycle: ";
+        print_cycle(r_rand.best_cycle);
+        std::cout << "\n";
+
+        auto r_nn_end = solve_nn_end(n, k, dist, costs);
+        std::cout << "NN (End):     min=" << r_nn_end.min_val << ", max=" << r_nn_end.max_val << ", avg=" << r_nn_end.avg_val << "\n";
+        std::cout << "  best cycle: ";
+        print_cycle(r_nn_end.best_cycle);
+        std::cout << "\n";
+
+        auto r_nn_any = solve_nn_any(n, k, dist, costs);
+        std::cout << "NN (Any Pos): min=" << r_nn_any.min_val << ", max=" << r_nn_any.max_val << ", avg=" << r_nn_any.avg_val << "\n";
+        std::cout << "  best cycle: ";
+        print_cycle(r_nn_any.best_cycle);
+        std::cout << "\n";
+
+        auto r_gc = solve_greedy_cycle(n, k, dist, costs);
+        std::cout << "Greedy Cycle: min=" << r_gc.min_val << ", max=" << r_gc.max_val << ", avg=" << r_gc.avg_val << "\n";
+        std::cout << "  best cycle: ";
+        print_cycle(r_gc.best_cycle);
+        std::cout << "\n";
+    }
+
+    return 0;
+}
