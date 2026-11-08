@@ -1,15 +1,29 @@
-CXX = g++
-CXXFLAGS = -std=c++17 -O2 -Wall
-LDFLAGS = -static-libstdc++ -static-libgcc
-SRC = src/main.cpp src/TSPSolver.cpp
+CXX ?= g++
+CXXFLAGS = -std=c++17 -O2 -Wall -static
+SRC = src/main.cpp src/TSPSolver.cpp src/LMSearch.cpp
+HDR = src/TSPSolver.h src/Types.h src/instance.h src/construct.h
 
-greedy: $(SRC) src/TSPSolver.h src/Types.h src/instance.h src/construct.h
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(SRC)
+ifeq ($(OS),Windows_NT)
+  EXE = .exe
+  RUN = .\\
+  RM = del /Q /F
+else
+  EXE =
+  RUN = ./
+  RM = rm -f
+endif
 
-run: greedy
-	mkdir -p results && ./greedy
+tsp$(EXE): $(SRC) $(HDR)
+	$(CXX) $(CXXFLAGS) -o tsp$(EXE) $(SRC)
+
+run: tsp$(EXE)
+	$(RUN)tsp$(EXE)
+
+test: tests/test_lm.cpp src/TSPSolver.cpp src/LMSearch.cpp $(HDR)
+	$(CXX) $(CXXFLAGS) -o test_lm$(EXE) tests/test_lm.cpp src/TSPSolver.cpp src/LMSearch.cpp
+	$(RUN)test_lm$(EXE)
 
 clean:
-	rm -f greedy
+	-$(RM) tsp$(EXE) test_lm$(EXE)
 
-.PHONY: run clean
+.PHONY: run test clean
